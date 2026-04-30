@@ -1,0 +1,119 @@
+#!/bin/bash
+
+set -e
+
+KEY=../kv-node-key.pem
+PORT=3030
+
+PUBLIC_IP_FILE=../public_ips.txt
+PRIVATE_IP_FILE=../private_ips.txt
+SQS_FILE=../sqs_urls.txt
+SNS_FILE=../sns_topic.txt
+AWS_ENV_FILE=../aws.env
+
+# -------- VALIDATION --------
+[ $# -eq 0 ] && echo "Usage: ./chaos.sh <ip1> [ip2 ...]" && exit 1
+
+[ ! -f "$KEY" ] && echo "Missing key" && exit 1
+[ ! -f "$PUBLIC_IP_FILE" ] && echo "Missing public_ips.txt" && exit 1
+[ ! -f "$PRIVATE_IP_FILE" ] && echo "Missing private_ips.txt" && exit 1
+[ ! -f "$SQS_FILE" ] && echo "Missing sqs_urls.txt" && exit 1
+[ ! -f "$SNS_FILE" ] && echo "Missing sns_topic.txt" && exit 1
+[ ! -f "$AWS_ENV_FILE" ] && echo "Missing aws.env" && exit 1
+
+# Load AWS creds
+source "$AWS_ENV_FILE"
+
+# Read files
+PUBLIC_IPS=()
+while IFS= read -r line || [ -n "$line" ]; do PUBLIC_IPS+=("$line"); done < "$PUBLIC_IP_FILE"
+
+PRIVATE_IPS=()
+while IFS= read -r line || [ -n "$line" ]; do PRIVATE_IPS+=("$line"); done < "$PRIVATE_IP_FILE"
+
+SQS_URLS=()
+while IFS= read -r line || [ -n "$line" ]; do SQS_URLS+=("$line"); done < "$SQS_FILE"
+
+SNS_TOPIC_ARN=$(cat "$SNS_FILE")
+
+# -------- BUILD CLUSTER LIST --------
+NODE_LIST=""
+for ip in "${PRIVATE_IPS[@]}"; do
+  NODE_LIST="$NODE_LIST http://$ip:$PORT"
+done
+NODE_LIST=$(echo "$NODE_LIST" | sed 's/^ *//')
+
+echo "Cluster: $NODE_LIST"
+
+# -------- CHAOS LOOP --------
+for TARGET_IP in "$@"; do
+
+  echo "================================="
+  echo "💣 Target: $TARGET_IP"
+  echo "================================="
+
+  # Find index
+  INDEX=-1
+  for i in "${!PUBLIC_IPS[@]}"; do
+    if [ "${PUBLIC_IPS[$i]}" == "$TARGET_IP" ]; then
+      INDEX=$i
+      break
+    fi
+  done
+
+  if [ "$INDEX" -eq -1 ]; then
+    echo "❌ IP not found: $TARGET_IP"
+    continue
+  fi
+
+  PRIVATE_IP=${PRIVATE_IPS[$INDEX]}
+  SQS_URL=${SQS_URLS[$INDEX]}
+
+  echo "Private IP: $PRIVATE_IP"
+
+  # -------- KILL --------
+  echo "💀 Killing node..."
+
+  ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$TARGET_IP << EOF
+sudo docker rm -f kv-node || true
+EOF
+
+  sleep 30
+
+  # -------- REVIVE --------
+  echo "🔄 Restarting node..."
+
+  ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$TARGET_IP << EOF
+set -e
+
+mkdir -p /home/ubuntu/kv-data
+
+sudo docker run -d \
+  --name kv-node \
+  -p $PORT:$PORT \
+  -v /home/ubuntu/kv-data:/app/data \
+  -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
+  -e AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION" \
+  -e SNS_TOPIC_ARN="$SNS_TOPIC_ARN" \
+  -e SQS_QUEUE_URL="$SQS_URL" \
+  kv-python
+EOF
+
+  sleep 5
+
+  # -------- VERIFY --------
+  echo "🔍 Checking health..."
+
+  if curl -s --max-time 3 http://$TARGET_IP:$PORT/health >/dev/null; then
+    echo "✅ Node recovered: $TARGET_IP"
+  else
+    echo "❌ Node failed: $TARGET_IP"
+    ssh -i $KEY ubuntu@$TARGET_IP "sudo docker logs kv-node || true"
+  fi
+
+  echo ""
+done
+
+echo "🎯 Chaos test complete"

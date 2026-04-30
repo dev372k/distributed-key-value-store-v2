@@ -1,0 +1,76 @@
+# ----------------------
+# Python
+# ----------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+
+# Virtual environments
+venv/
+.env/
+
+# ----------------------
+# AWS / Secrets (CRITICAL)
+# ----------------------
+aws.env
+*.pem
+*.key
+
+# ----------------------
+# Terraform
+# ----------------------
+.terraform/
+.terraform.lock.hcl
+
+terraform.tfstate
+terraform.tfstate.*
+*.tfvars
+
+# ----------------------
+# Docker
+# ----------------------
+*.tar
+*.tar.gz
+*.rar
+*.img
+
+# ----------------------
+# Build / Output
+# ----------------------
+build/
+build-output/
+dist/
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
+jmeter.log
+
+# ----------------------
+# OS files
+# ----------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------
+# IDE / Editor
+# ----------------------
+.vscode/
+.idea/
+
+# ----------------------
+# Test / temp files
+# ----------------------
+tmp/
+temp/
+*.tmp
+
+# ----------------------
+# Data (IMPORTANT - your EBS mount local copies)
+# ----------------------
+data/
+kv-data/

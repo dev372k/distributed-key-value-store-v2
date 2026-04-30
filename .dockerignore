@@ -1,0 +1,88 @@
+# ----------------------
+# Git
+# ----------------------
+.git
+.gitignore
+
+# ----------------------
+# Python cache
+# ----------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ----------------------
+# Virtual env
+# ----------------------
+venv/
+.env/
+
+# ----------------------
+# AWS / Secrets (CRITICAL)
+# ----------------------
+aws.env
+*.pem
+*.key
+
+# ----------------------
+# Terraform (heavy + unnecessary)
+# ----------------------
+infra/
+.terraform/
+terraform.tfstate
+terraform.tfstate.*
+*.tfvars
+
+# ----------------------
+# Logs
+# ----------------------
+*.log
+jmeter.log
+
+# ----------------------
+# Docker artifacts
+# ----------------------
+*.tar
+*.tar.gz
+*.rar
+
+# ----------------------
+# Build output
+# ----------------------
+build/
+build-output/
+dist/
+
+# ----------------------
+# OS files
+# ----------------------
+.DS_Store
+Thumbs.db
+
+# ----------------------
+# IDE
+# ----------------------
+.vscode/
+.idea/
+
+# ----------------------
+# Tests (optional - exclude if not needed in container)
+# ----------------------
+tests/
+
+# ----------------------
+# Data (do NOT bake into image)
+# ----------------------
+data/
+kv-data/
+
+# ----------------------
+# Everything except what we need
+# ----------------------
+# (IMPORTANT: we ONLY want main/ + dockerfile)
+*
+!dockerfile
+!main/
+!main/app.py
+!main/requirements.txt
