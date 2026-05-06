@@ -11,8 +11,10 @@ SQS_FILE=../sqs_urls.txt
 SNS_FILE=../sns_topic.txt
 AWS_ENV_FILE=../aws.env
 
+KILL_DURATION=30
+
 # -------- VALIDATION --------
-[ $# -eq 0 ] && echo "Usage: ./chaos.sh <ip1> [ip2 ...]" && exit 1
+[ $# -eq 0 ] && echo "Usage: ./chaos.sh ip1,ip2,ip3" && exit 1
 
 [ ! -f "$KEY" ] && echo "Missing key" && exit 1
 [ ! -f "$PUBLIC_IP_FILE" ] && echo "Missing public_ips.txt" && exit 1
@@ -21,10 +23,10 @@ AWS_ENV_FILE=../aws.env
 [ ! -f "$SNS_FILE" ] && echo "Missing sns_topic.txt" && exit 1
 [ ! -f "$AWS_ENV_FILE" ] && echo "Missing aws.env" && exit 1
 
-# Load AWS creds
-source "$AWS_ENV_FILE"
+# -------- LOAD AWS ENV --------
+export $(grep -v '^#' "$AWS_ENV_FILE" | xargs)
 
-# Read files
+# -------- READ FILES --------
 PUBLIC_IPS=()
 while IFS= read -r line || [ -n "$line" ]; do PUBLIC_IPS+=("$line"); done < "$PUBLIC_IP_FILE"
 
@@ -36,23 +38,24 @@ while IFS= read -r line || [ -n "$line" ]; do SQS_URLS+=("$line"); done < "$SQS_
 
 SNS_TOPIC_ARN=$(cat "$SNS_FILE")
 
-# -------- BUILD CLUSTER LIST --------
-NODE_LIST=""
-for ip in "${PRIVATE_IPS[@]}"; do
-  NODE_LIST="$NODE_LIST http://$ip:$PORT"
-done
-NODE_LIST=$(echo "$NODE_LIST" | sed 's/^ *//')
+# -------- BUILD NODE LIST --------
+NODE_LIST=$(paste -sd "," "$PRIVATE_IP_FILE")
 
 echo "Cluster: $NODE_LIST"
 
-# -------- CHAOS LOOP --------
-for TARGET_IP in "$@"; do
+# -------- PARSE INPUT --------
+IFS=',' read -r -a TARGET_IPS <<< "$1"
+
+echo "========== CHAOS TEST =========="
+
+for TARGET_IP in "${TARGET_IPS[@]}"; do
+
+  TARGET_IP=$(echo "$TARGET_IP" | xargs)
 
   echo "================================="
   echo "💣 Target: $TARGET_IP"
   echo "================================="
 
-  # Find index
   INDEX=-1
   for i in "${!PUBLIC_IPS[@]}"; do
     if [ "${PUBLIC_IPS[$i]}" == "$TARGET_IP" ]; then
@@ -78,7 +81,8 @@ for TARGET_IP in "$@"; do
 sudo docker rm -f kv-node || true
 EOF
 
-  sleep 30
+  echo "⏳ Node down for ${KILL_DURATION}s..."
+  sleep $KILL_DURATION
 
   # -------- REVIVE --------
   echo "🔄 Restarting node..."
@@ -86,19 +90,21 @@ EOF
   ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$TARGET_IP << EOF
 set -e
 
-mkdir -p /home/ubuntu/kv-data
+sudo mkdir -p /home/ubuntu/kv-data
 
 sudo docker run -d \
   --name kv-node \
   -p $PORT:$PORT \
   -v /home/ubuntu/kv-data:/app/data \
+  -e NODE_LIST="$NODE_LIST" \
+  -e MY_IP="$PRIVATE_IP" \
   -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
   -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
   -e AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
   -e AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION" \
   -e SNS_TOPIC_ARN="$SNS_TOPIC_ARN" \
   -e SQS_QUEUE_URL="$SQS_URL" \
-  kv-python
+  kv-node
 EOF
 
   sleep 5
@@ -114,6 +120,7 @@ EOF
   fi
 
   echo ""
+
 done
 
 echo "🎯 Chaos test complete"
