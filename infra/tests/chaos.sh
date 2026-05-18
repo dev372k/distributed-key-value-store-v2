@@ -13,6 +13,9 @@ AWS_ENV_FILE=../aws.env
 
 KILL_DURATION=30
 
+# -------- DOCKER IMAGE --------
+DOCKER_IMAGE="owais372k/kv-node:latest"
+
 # -------- VALIDATION --------
 [ $# -eq 0 ] && echo "Usage: ./chaos.sh ip1,ip2,ip3" && exit 1
 
@@ -28,13 +31,19 @@ export $(grep -v '^#' "$AWS_ENV_FILE" | xargs)
 
 # -------- READ FILES --------
 PUBLIC_IPS=()
-while IFS= read -r line || [ -n "$line" ]; do PUBLIC_IPS+=("$line"); done < "$PUBLIC_IP_FILE"
+while IFS= read -r line || [ -n "$line" ]; do
+  PUBLIC_IPS+=("$line")
+done < "$PUBLIC_IP_FILE"
 
 PRIVATE_IPS=()
-while IFS= read -r line || [ -n "$line" ]; do PRIVATE_IPS+=("$line"); done < "$PRIVATE_IP_FILE"
+while IFS= read -r line || [ -n "$line" ]; do
+  PRIVATE_IPS+=("$line")
+done < "$PRIVATE_IP_FILE"
 
 SQS_URLS=()
-while IFS= read -r line || [ -n "$line" ]; do SQS_URLS+=("$line"); done < "$SQS_FILE"
+while IFS= read -r line || [ -n "$line" ]; do
+  SQS_URLS+=("$line")
+done < "$SQS_FILE"
 
 SNS_TOPIC_ARN=$(cat "$SNS_FILE")
 
@@ -57,11 +66,14 @@ for TARGET_IP in "${TARGET_IPS[@]}"; do
   echo "================================="
 
   INDEX=-1
+
   for i in "${!PUBLIC_IPS[@]}"; do
+
     if [ "${PUBLIC_IPS[$i]}" == "$TARGET_IP" ]; then
       INDEX=$i
       break
     fi
+
   done
 
   if [ "$INDEX" -eq -1 ]; then
@@ -74,26 +86,52 @@ for TARGET_IP in "${TARGET_IPS[@]}"; do
 
   echo "Private IP: $PRIVATE_IP"
 
-  # -------- KILL --------
+  # -------- KILL NODE --------
   echo "💀 Killing node..."
 
-  ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$TARGET_IP << EOF
+  ssh \
+    -o StrictHostKeyChecking=no \
+    -i $KEY \
+    ubuntu@$TARGET_IP << EOF
+
 sudo docker rm -f kv-node || true
+
 EOF
 
   echo "⏳ Node down for ${KILL_DURATION}s..."
   sleep $KILL_DURATION
 
-  # -------- REVIVE --------
+  # -------- REVIVE NODE --------
   echo "🔄 Restarting node..."
 
-  ssh -o StrictHostKeyChecking=no -i $KEY ubuntu@$TARGET_IP << EOF
+  ssh \
+    -o StrictHostKeyChecking=no \
+    -i $KEY \
+    ubuntu@$TARGET_IP << EOF
+
 set -e
+
+echo "========== RECOVERY =========="
+
+sudo systemctl start docker
+
+echo "Pulling latest image..."
+
+sudo docker pull $DOCKER_IMAGE
+
+echo "Creating persistence directory..."
 
 sudo mkdir -p /home/ubuntu/kv-data
 
+echo "Removing old container..."
+
+sudo docker rm -f kv-node || true
+
+echo "Starting container..."
+
 sudo docker run -d \
   --name kv-node \
+  --restart unless-stopped \
   -p $PORT:$PORT \
   -v /home/ubuntu/kv-data:/app/data \
   -e NODE_LIST="$NODE_LIST" \
@@ -104,19 +142,35 @@ sudo docker run -d \
   -e AWS_DEFAULT_REGION="$AWS_DEFAULT_REGION" \
   -e SNS_TOPIC_ARN="$SNS_TOPIC_ARN" \
   -e SQS_QUEUE_URL="$SQS_URL" \
-  kv-node
+  $DOCKER_IMAGE
+
 EOF
 
-  sleep 5
+  echo "⏳ Waiting for recovery..."
+  sleep 10
 
   # -------- VERIFY --------
   echo "🔍 Checking health..."
 
-  if curl -s --max-time 3 http://$TARGET_IP:$PORT/health >/dev/null; then
-    echo "✅ Node recovered: $TARGET_IP"
+  if curl -s --max-time 5 http://$TARGET_IP:$PORT/health >/dev/null; then
+
+    echo "✅ Node recovered successfully: $TARGET_IP"
+
   else
-    echo "❌ Node failed: $TARGET_IP"
-    ssh -i $KEY ubuntu@$TARGET_IP "sudo docker logs kv-node || true"
+
+    echo "❌ Node recovery failed: $TARGET_IP"
+
+    ssh \
+      -o StrictHostKeyChecking=no \
+      -i $KEY \
+      ubuntu@$TARGET_IP << EOF
+
+echo "========== DOCKER LOGS =========="
+
+sudo docker logs kv-node || true
+
+EOF
+
   fi
 
   echo ""
